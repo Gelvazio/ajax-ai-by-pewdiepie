@@ -32,6 +32,25 @@ Cada pasta abaixo é uma cópia dos arquivos de outro repositório, sem o `.git`
 
 Não clonado ainda: "Security Audit Skill" (vários candidatos, sem confirmação).
 
+## Regras por projeto
+
+Como as pastas não têm `.git`, para atualizar uma delas é preciso recopiar o repositório original.
+
+- **`odysseus/`:** rode com Docker (`docker compose up -d --build`) e mantenha `AUTH_ENABLED=true` em qualquer rede acessível.
+- **`i-have-adhd/`:** leia o `AGENTS.md` do próprio repositório antes de instalar a skill.
+- **`OmniRoute/`:** nunca commite chaves de API. Use o `.env.example` como modelo e leia o `SECURITY.md` antes de expor o gateway.
+- **`ponytail/`:** leia o README antes de usar. Os detalhes ainda não foram verificados aqui.
+- **`matt-pocock-skills/`:** use as skills como ponto de partida e adapte ao projeto. Confira a licença antes de redistribuir.
+- **`superpowers/`:** compare os nomes das skills com as que já existem antes de instalar, para evitar conflito.
+- **`diagram-design/`:** revise o diagrama gerado antes de usá-lo em documentação ou apresentação.
+- **`humanizer/`:** use para revisar a escrita, não para ocultar que um texto foi gerado por IA.
+- **`graphify/`:** leia o README antes de usar. Os detalhes ainda não foram verificados aqui.
+- **`addy-osmani-skills/`:** use como checklist de engenharia e adapte ao time, sem seguir tudo ao pé da letra.
+- **`impeccable/`:** leia o README antes de usar. Os detalhes ainda não foram verificados aqui.
+- **`repolyze/`:** nunca commite o `.env` nem credenciais do banco Prisma.
+- **`foreman/`:** copie o `config.sample.yaml` para configurar, e revise o escopo antes de deixar o supervisor rodar agentes.
+- **`mineru/`:** confira manualmente tabelas e fórmulas na conversão, que são as partes com mais erro.
+
 ## Para quem trabalhar aqui
 
 - Antes de criar estrutura, confirme com o dono do projeto qual é o objetivo, a linguagem e o público.
