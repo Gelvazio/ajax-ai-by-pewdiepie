@@ -31,6 +31,7 @@ Cada pasta abaixo é uma cópia dos arquivos de outro repositório, sem o `.git`
 | `mineru/` | opendatalab/MinerU | Converte PDFs e documentos para Markdown ou JSON, com foco em layouts complexos, tabelas e fórmulas |
 | `openrig/` | mvschwarz/openrig | Runtime para rodar um time de agentes (Claude Code e Codex) definido em YAML, com um comando de inicialização |
 | `hindsight/` | vectorize-io/hindsight | Camada de memória para agentes, com API, cliente e integrações (detalhes pela busca e pelo README) |
+| `crm/` | trycompai/crm | CRM de código aberto feito para ser usado por agentes de IA (Comp AI CRM) |
 
 Não clonado ainda: "Security Audit Skill" (vários candidatos, sem confirmação).
 
@@ -53,6 +54,7 @@ Como as pastas não têm `.git`, para atualizar uma delas é preciso recopiar o 
 - **`foreman/`:** copie o `config.sample.yaml` para configurar, e revise o escopo antes de deixar o supervisor rodar agentes.
 - **`mineru/`:** confira manualmente tabelas e fórmulas na conversão, que são as partes com mais erro.
 - **`hindsight/`:** leia o `.env.example` e a pasta `docker` antes de subir o serviço, e não exponha a API de memória sem autenticação.
+- **`crm/`:** leia o `AGENTS.md` e o `.env.example` antes de subir o projeto, e nunca commite o `.env` com credenciais.
 - **`openrig/`:** leia o `docs/reference/getting-started.md` e a seção "What OpenRig changes on your machine" do README antes de rodar, porque ele grava hooks e configurações de confiança nos provedores.
 
 ## Para quem trabalhar aqui
