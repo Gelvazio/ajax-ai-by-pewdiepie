@@ -5,8 +5,10 @@ Licença: MIT (Gelvazio Camargo, 2026).
 
 ## Estado atual
 
-- O projeto está no início. O README tem só o título, sem descrição.
-- Não há código-fonte ainda. O histórico tem um único commit, "Initial commit".
+- O projeto ainda não tem descrição. O README tem só o título.
+- Não há código-fonte próprio na raiz. Os arquivos versionados na raiz são `CLAUDE.md`, `README.md`, `LICENSE`, `.gitignore` e `index.html` (página com os cards dos projetos do `CLAUDE.md`).
+- As pastas listadas abaixo são cópias de outros repositórios, sem `.git`, e são versionadas junto com este repositório.
+- O histórico já tem commits de documentação (registro de projetos e regras) e de cópia de repositórios. Ele não tem mais só o "Initial commit".
 - O `.gitignore` é um modelo para C++ com CMake e JetBrains (CLion). Isso sugere uma base C++, mas ainda não está confirmado.
 
 ## Projetos clonados neste repositório
