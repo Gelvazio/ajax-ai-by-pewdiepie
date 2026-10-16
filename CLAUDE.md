@@ -33,6 +33,7 @@ Cada pasta abaixo é uma cópia dos arquivos de outro repositório, sem o `.git`
 | `hindsight/` | vectorize-io/hindsight | Camada de memória para agentes, com API, cliente e integrações (detalhes pela busca e pelo README) |
 | `crm/` | trycompai/crm | CRM de código aberto feito para ser usado por agentes de IA (Comp AI CRM) |
 | `andrej-karpathy-skills/` | forrestchang/andrej-karpathy-skills | Um `CLAUDE.md` com diretrizes para o Claude Code, inspiradas nas observações do Andrej Karpathy sobre erros de LLMs em código |
+| `claude-octopus/` | nyldn/claude-octopus | Plugin que faz vários provedores de IA (Codex, Copilot, Ollama, Grok etc.) revisarem o código, com gates de consenso que apontam divergências (versão 11.14.0) |
 | `paddleocr/` | PaddlePaddle/PaddleOCR | Kit de OCR e engine de IA para documentos, com API, SDK e integrações |
 
 Não clonado ainda: "Security Audit Skill" (vários candidatos, sem confirmação).
@@ -57,6 +58,7 @@ Como as pastas não têm `.git`, para atualizar uma delas é preciso recopiar o 
 - **`foreman/`:** copie o `config.sample.yaml` para configurar, e revise o escopo antes de deixar o supervisor rodar agentes.
 - **`mineru/`:** confira manualmente tabelas e fórmulas na conversão, que são as partes com mais erro.
 - **`hindsight/`:** leia o `.env.example` e a pasta `docker` antes de subir o serviço, e não exponha a API de memória sem autenticação.
+- **`claude-octopus/`:** exige Claude Code v2.1.14 ou superior. Antes de ativar provedores externos, confirme que as chaves de API estão no ambiente e não no repositório, porque o plugin envia código para terceiros.
 - **`andrej-karpathy-skills/`:** o `CLAUDE.md` dele é um conjunto de diretrizes, não código. Antes de copiar trechos para o seu `CLAUDE.md`, confirme que as regras fazem sentido para o seu projeto.
 - **`paddleocr/`:** instale o pacote com as dependências do `requirements.txt` ou `pyproject.toml`, e teste o OCR com um documento seu antes de usar em produção.
 - **`crm/`:** leia o `AGENTS.md` e o `.env.example` antes de subir o projeto, e nunca commite o `.env` com credenciais.
