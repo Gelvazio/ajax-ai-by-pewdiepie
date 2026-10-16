@@ -45,6 +45,7 @@ Como as pastas não têm `.git`, para atualizar uma delas é preciso recopiar o 
 - **`OmniRoute/`:** nunca commite chaves de API. Use o `.env.example` como modelo e leia o `SECURITY.md` antes de expor o gateway.
 - **`ponytail/`:** leia o README antes de usar. Os detalhes ainda não foram verificados aqui.
 - **`matt-pocock-skills/`:** use as skills como ponto de partida e adapte ao projeto. Confira a licença antes de redistribuir.
+- **`matt-pocock-skills/skills/in-progress/chief-of-staff/`:** skill em beta. Antes de usar, confirme com o usuário a meta de longo prazo e os agendamentos recorrentes que ela sugerir, porque ela coordena subagentes que podem rodar por muito tempo.
 - **`superpowers/`:** compare os nomes das skills com as que já existem antes de instalar, para evitar conflito.
 - **`diagram-design/`:** revise o diagrama gerado antes de usá-lo em documentação ou apresentação.
 - **`humanizer/`:** use para revisar a escrita, não para ocultar que um texto foi gerado por IA.
