@@ -1,0 +1,600 @@
+#!/usr/bin/env bash
+# Doctor 2.0 structured-output and exit-semantics contract.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
+test_suite "Doctor 2.0 structured diagnostics"
+
+export HOME="$TEST_TMP_DIR/home"
+mkdir -p "$HOME"
+
+MAGENTA="" BOLD="" BLUE="" GREEN="" YELLOW="" RED="" DIM="" NC=""
+source "$PROJECT_ROOT/scripts/lib/doctor.sh"
+
+test_case "install-source detection does not depend on a grep pipeline"
+grep() { return 99; }
+install_source_without_grep="$(doctor_install_source "$PROJECT_ROOT")"
+unset -f grep
+if [[ "$install_source_without_grep" == "git-checkout" ]]; then
+    test_pass
+else
+    test_fail "git checkout was misclassified when grep was unavailable: $install_source_without_grep"
+fi
+
+test_case "config diagnostics identify the source checkout and exact build"
+DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+SCRIPT_DIR="$PROJECT_ROOT/scripts" PLUGIN_DIR="$PROJECT_ROOT" doctor_check_config
+config_results="$(for ((i=0; i<${#DOCTOR_RESULTS_NAME[@]}; i++)); do printf '%s=%s|%s\n' "${DOCTOR_RESULTS_NAME[$i]}" "${DOCTOR_RESULTS_STATUS[$i]}" "${DOCTOR_RESULTS_MSG[$i]}"; done)"
+expected_sha="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+if [[ "$config_results" == *"install-source=pass|Install source: git-checkout"* &&
+      "$config_results" == *"plugin-build=pass|Build SHA: $expected_sha"* ]]; then
+    test_pass
+else
+    test_fail "config identity results: $config_results"
+fi
+
+test_case "state check resolves one workspace for stale-results and workspace-writable, honoring CLAUDE_PLUGIN_DATA over a competing WORKSPACE_DIR"
+# Mirrors the orchestrate.sh `doctor` early-dispatch exec boundary
+# (scripts/orchestrate.sh:62): CLAUDE_PLUGIN_DATA (CC v2.1.78+) must win even
+# when WORKSPACE_DIR is independently set to a different, real directory —
+# not merely left unset and falling through by elimination. Run in a
+# subshell so the env overrides and DOCTOR_RESULTS_* reset never leak into
+# later test cases; doctor_add's array appends still work since a subshell
+# is a forked copy of the same process, not a separate bash invocation.
+plugin_data_dir="$TEST_TMP_DIR/plugin-data"
+mkdir -p "$plugin_data_dir/results"
+touch -t 202001010000 "$plugin_data_dir/results/old-result.md"
+competing_workspace_dir="$TEST_TMP_DIR/competing-workspace-1"
+mkdir -p "$competing_workspace_dir"
+state_results="$(
+    DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+    WORKSPACE_DIR="$competing_workspace_dir" \
+    CLAUDE_PLUGIN_DATA="$plugin_data_dir" \
+    STATE_FILE="$TEST_TMP_DIR/no-such-state.json" \
+    PREFLIGHT_CACHE_FILE="$TEST_TMP_DIR/no-such-preflight-cache" \
+    PID_FILE="$TEST_TMP_DIR/no-such-pid-file" \
+        doctor_check_state
+    for ((i=0; i<${#DOCTOR_RESULTS_NAME[@]}; i++)); do printf '%s=%s|%s|%s\n' "${DOCTOR_RESULTS_NAME[$i]}" "${DOCTOR_RESULTS_STATUS[$i]}" "${DOCTOR_RESULTS_MSG[$i]}" "${DOCTOR_RESULTS_DETAIL[$i]}"; done
+)"
+if [[ "$state_results" == *"stale-results=warn|1 result file(s) older than 7 days|In ${plugin_data_dir}/results"* &&
+      "$state_results" == *"workspace-writable=pass|Workspace writable|${plugin_data_dir}"* &&
+      "$state_results" != *"$competing_workspace_dir"* ]]; then
+    test_pass
+else
+    test_fail "state results did not honor CLAUDE_PLUGIN_DATA over a competing WORKSPACE_DIR: $state_results"
+fi
+
+test_case "state check falls back to the documented CLAUDE_OCTOPUS_WORKSPACE override ahead of a competing WORKSPACE_DIR when CLAUDE_PLUGIN_DATA is unset"
+# resolve_octopus_workspace() (scripts/state-manager.sh) ranks
+# CLAUDE_OCTOPUS_WORKSPACE above the ${HOME}/.claude-octopus default;
+# doctor_check_state's own resolution must agree with it, and win over a
+# separately-set WORKSPACE_DIR too. Subshell-isolated for the same reason
+# as the case above.
+octopus_workspace_dir="$TEST_TMP_DIR/octopus-workspace"
+mkdir -p "$octopus_workspace_dir"
+competing_workspace_dir_2="$TEST_TMP_DIR/competing-workspace-2"
+mkdir -p "$competing_workspace_dir_2"
+state_results="$(
+    DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+    unset CLAUDE_PLUGIN_DATA
+    WORKSPACE_DIR="$competing_workspace_dir_2" \
+    CLAUDE_OCTOPUS_WORKSPACE="$octopus_workspace_dir" \
+    STATE_FILE="$TEST_TMP_DIR/no-such-state.json" \
+    PREFLIGHT_CACHE_FILE="$TEST_TMP_DIR/no-such-preflight-cache" \
+    PID_FILE="$TEST_TMP_DIR/no-such-pid-file" \
+        doctor_check_state
+    for ((i=0; i<${#DOCTOR_RESULTS_NAME[@]}; i++)); do printf '%s=%s|%s|%s\n' "${DOCTOR_RESULTS_NAME[$i]}" "${DOCTOR_RESULTS_STATUS[$i]}" "${DOCTOR_RESULTS_MSG[$i]}" "${DOCTOR_RESULTS_DETAIL[$i]}"; done
+)"
+if [[ "$state_results" == *"workspace-writable=pass|Workspace writable|${octopus_workspace_dir}"* &&
+      "$state_results" != *"$competing_workspace_dir_2"* ]]; then
+    test_pass
+else
+    test_fail "state results did not honor CLAUDE_OCTOPUS_WORKSPACE: $state_results"
+fi
+
+test_case "config check reads circuit-breaker state from the documented workspace override"
+circuit_workspace_dir="$TEST_TMP_DIR/circuit-workspace"
+circuit_competing_dir="$TEST_TMP_DIR/circuit-competing"
+mkdir -p "$circuit_workspace_dir/provider-state" "$circuit_competing_dir/provider-state"
+printf '%s\n' open >"$circuit_workspace_dir/provider-state/codex.state"
+printf '%s\n' closed >"$circuit_competing_dir/provider-state/codex.state"
+circuit_results="$(
+    DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+    unset CLAUDE_PLUGIN_DATA
+    WORKSPACE_DIR="$circuit_competing_dir"
+    CLAUDE_OCTOPUS_WORKSPACE="$circuit_workspace_dir"
+    SCRIPT_DIR="$PROJECT_ROOT/scripts"
+    PLUGIN_DIR="$PROJECT_ROOT"
+    export WORKSPACE_DIR CLAUDE_OCTOPUS_WORKSPACE SCRIPT_DIR PLUGIN_DIR
+    doctor_check_config
+    for ((i=0; i<${#DOCTOR_RESULTS_NAME[@]}; i++)); do printf '%s=%s|%s\n' "${DOCTOR_RESULTS_NAME[$i]}" "${DOCTOR_RESULTS_STATUS[$i]}" "${DOCTOR_RESULTS_MSG[$i]}"; done
+)"
+if [[ "$circuit_results" == *"circuit-breaker-open=warn|Circuit breaker OPEN for: codex"* ]]; then
+    test_pass
+else
+    test_fail "config check did not honor CLAUDE_OCTOPUS_WORKSPACE for circuit state: $circuit_results"
+fi
+
+test_case "standalone doctor.sh resolves PLUGIN_DIR from its own script location, matching the orchestrate.sh exec-dispatch boundary"
+# scripts/orchestrate.sh:62 exec's doctor.sh into a fresh process before
+# PLUGIN_DIR is exported (scripts/orchestrate.sh:46 assigns but never
+# exports it), so this must pass with PLUGIN_DIR entirely unset — exactly
+# how orchestrate.sh invokes it.
+if doctor_env_output="$(cd "$PROJECT_ROOT" && env -u PLUGIN_DIR -u CLAUDE_PLUGIN_ROOT HOME="$HOME" bash scripts/doctor.sh --json config 2>&1)"; then
+    doctor_env_rc=0
+else
+    doctor_env_rc=$?
+fi
+expected_sha="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+# With PLUGIN_DIR unresolved (the pre-fix bug), plugin-build can't read the
+# checkout and reports status "info"/"Build SHA unavailable" instead of the
+# real SHA, and install-source's detail is "" instead of the checkout path.
+if [[ "$doctor_env_rc" -le 1 ]] &&
+   [[ "$doctor_env_output" == *"\"message\":\"Build SHA: ${expected_sha}\""* ]] &&
+   [[ "$doctor_env_output" == *"\"name\":\"install-source\",\"category\":\"config\",\"status\":\"pass\",\"message\":\"Install source: git-checkout\",\"detail\":\"${PROJECT_ROOT}\""* ]]; then
+    test_pass
+else
+    test_fail "standalone doctor.sh did not resolve PLUGIN_DIR without it pre-set: rc=$doctor_env_rc output=$doctor_env_output"
+fi
+
+test_case "Perplexity-only auth is described as a credential, not workflow readiness"
+original_doctor_collect="$(declare -f _doctor_collect_provider_readiness)"
+_doctor_collect_provider_readiness() {
+    DOCTOR_PROVIDER_READINESS=('{"provider":"perplexity","status":"available","remediation":""}')
+}
+DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+doctor_check_auth
+auth_summary=""
+for i in "${!DOCTOR_RESULTS_NAME[@]}"; do
+    if [[ "${DOCTOR_RESULTS_NAME[$i]}" == "any-provider-auth" ]]; then
+        auth_summary="${DOCTOR_RESULTS_MSG[$i]}"
+    fi
+done
+if [[ "$auth_summary" == "At least one provider credential is configured" ]]; then
+    test_pass
+else
+    test_fail "ambiguous auth summary: $auth_summary"
+fi
+eval "$original_doctor_collect"
+
+# Keep this suite deterministic and limited to the Doctor runner/output layer.
+# Full category implementations retain their own focused suites.
+doctor_check_providers() {
+    case "${DOCTOR_FIXTURE:-fail}" in
+        fail)
+            doctor_add "fixture-failure" "providers" "fail" $'broken "provider"\nline two\e' 'repair \\ safely'
+            ;;
+        mixed)
+            doctor_add "fixture-pass" "providers" "pass" "ready" ""
+            doctor_add "fixture-info" "providers" "info" "optional" ""
+            doctor_add "fixture-warning" "providers" "warn" "degraded" "repair"
+            ;;
+    esac
+}
+
+run_doctor_fixture() {
+    local name="$1"
+    shift
+    local root="$TEST_TMP_DIR/$name"
+    mkdir -p "$root"
+    set +e
+    do_doctor "$@" >"$root/stdout" 2>"$root/stderr"
+    DOCTOR_FIXTURE_RC=$?
+    set -e
+    DOCTOR_FIXTURE_STDOUT="$(<"$root/stdout")"
+    DOCTOR_FIXTURE_STDERR="$(<"$root/stderr")"
+}
+
+test_case "failed JSON diagnostics stay parseable and return nonzero"
+DOCTOR_FIXTURE=fail run_doctor_fixture json-fail providers --json
+expected_detail='repair \\ safely'
+if [[ "$DOCTOR_FIXTURE_RC" -eq 1 ]] &&
+   jq -e --arg expected_detail "$expected_detail" '
+      .schema_version == "10.0" and
+      .summary == {passed:0, warnings:0, failures:1, info:0, total:1, exit_code:1} and
+      (.results | length == 1) and
+      .results[0].name == "fixture-failure" and
+      .results[0].message == "broken \"provider\"\nline two\u001b" and
+      .results[0].detail == $expected_detail
+   ' <<<"$DOCTOR_FIXTURE_STDOUT" >/dev/null 2>&1 &&
+   [[ -z "$DOCTOR_FIXTURE_STDERR" ]]; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC stdout=$DOCTOR_FIXTURE_STDOUT stderr=$DOCTOR_FIXTURE_STDERR"
+fi
+
+test_case "warnings are structured but do not become failures"
+DOCTOR_FIXTURE=mixed run_doctor_fixture json-mixed --json providers
+if [[ "$DOCTOR_FIXTURE_RC" -eq 0 ]] &&
+   jq -e '
+      .summary == {passed:1, warnings:1, failures:0, info:1, total:3, exit_code:0} and
+      (.results | length == 3) and
+      ([.results[].status] == ["pass", "info", "warn"])
+   ' <<<"$DOCTOR_FIXTURE_STDOUT" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC json=$DOCTOR_FIXTURE_STDOUT"
+fi
+
+test_case "human diagnostics preserve aggregated failure exit status"
+DOCTOR_FIXTURE=fail run_doctor_fixture human-fail providers
+if [[ "$DOCTOR_FIXTURE_RC" -eq 1 && "$DOCTOR_FIXTURE_STDOUT" == *"1 failure(s)"* ]]; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC stdout=$DOCTOR_FIXTURE_STDOUT"
+fi
+
+test_case "recurrence diagnostics render under inherited errexit"
+recurrence_root="$TEST_TMP_DIR/recurrence-errexit"
+mkdir -p "$recurrence_root/.octo"
+printf '{"type":"quality-gate","timestamp":"%s","source":"fixture"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$recurrence_root/.octo/decisions.jsonl"
+set +e
+recurrence_output="$({
+    WORKSPACE_DIR="$recurrence_root" OCTOPUS_PLATFORM="${OCTOPUS_PLATFORM:-Linux}" \
+        bash -c 'set -eo pipefail; source "$1/scripts/lib/doctor.sh"; DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=(); doctor_check_recurrence; printf "%s\\n" "${DOCTOR_RESULTS_MSG[@]}"' _ "$PROJECT_ROOT"
+} 2>&1)"
+recurrence_rc=$?
+set -e
+if [[ "$recurrence_rc" -eq 0 && "$recurrence_output" == *"quality gate failure(s) recorded"* ]]; then
+    test_pass
+else
+    test_fail "rc=$recurrence_rc output=$recurrence_output"
+fi
+
+test_case "recurrence check reads decision history from the documented workspace override"
+recurrence_workspace_dir="$TEST_TMP_DIR/recurrence-workspace"
+recurrence_competing_dir="$TEST_TMP_DIR/recurrence-competing"
+mkdir -p "$recurrence_workspace_dir/.octo" "$recurrence_competing_dir/.octo"
+printf '%s\n' '{"type":"quality-gate","timestamp":"2026-09-18T00:00:00Z","source":"fixture"}' \
+    >"$recurrence_workspace_dir/.octo/decisions.jsonl"
+recurrence_workspace_results="$(
+    DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+    unset CLAUDE_PLUGIN_DATA
+    WORKSPACE_DIR="$recurrence_competing_dir"
+    CLAUDE_OCTOPUS_WORKSPACE="$recurrence_workspace_dir"
+    OCTOPUS_PLATFORM="${OCTOPUS_PLATFORM:-Linux}"
+    export WORKSPACE_DIR CLAUDE_OCTOPUS_WORKSPACE OCTOPUS_PLATFORM
+    doctor_check_recurrence
+    for ((i=0; i<${#DOCTOR_RESULTS_NAME[@]}; i++)); do printf '%s=%s|%s\n' "${DOCTOR_RESULTS_NAME[$i]}" "${DOCTOR_RESULTS_STATUS[$i]}" "${DOCTOR_RESULTS_MSG[$i]}"; done
+)"
+if [[ "$recurrence_workspace_results" == *"recurrence-data=pass|1 decisions logged"* &&
+      "$recurrence_workspace_results" == *"recurrence-qg=info|1 quality gate failure(s) recorded"* ]]; then
+    test_pass
+else
+    test_fail "recurrence check did not honor CLAUDE_OCTOPUS_WORKSPACE: $recurrence_workspace_results"
+fi
+
+test_case "unknown flags fail with usage instead of being ignored"
+run_doctor_fixture bad-flag providers --definitely-unknown
+if [[ "$DOCTOR_FIXTURE_RC" -eq 2 && -z "$DOCTOR_FIXTURE_STDOUT" && "$DOCTOR_FIXTURE_STDERR" == *"Usage:"* && "$DOCTOR_FIXTURE_STDERR" == *"--definitely-unknown"* ]]; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC stdout=$DOCTOR_FIXTURE_STDOUT stderr=$DOCTOR_FIXTURE_STDERR"
+fi
+
+test_case "unknown categories fail with usage instead of passing zero checks"
+run_doctor_fixture bad-category imaginary
+if [[ "$DOCTOR_FIXTURE_RC" -eq 2 && -z "$DOCTOR_FIXTURE_STDOUT" && "$DOCTOR_FIXTURE_STDERR" == *"Unknown doctor category: imaginary"* ]]; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC stdout=$DOCTOR_FIXTURE_STDOUT stderr=$DOCTOR_FIXTURE_STDERR"
+fi
+
+test_case "multiple category arguments are rejected as ambiguous"
+run_doctor_fixture two-categories providers auth
+if [[ "$DOCTOR_FIXTURE_RC" -eq 2 && "$DOCTOR_FIXTURE_STDERR" == *"Only one doctor category"* ]]; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC stderr=$DOCTOR_FIXTURE_STDERR"
+fi
+
+test_case "help is a successful usage path"
+run_doctor_fixture help --help
+if [[ "$DOCTOR_FIXTURE_RC" -eq 0 && "$DOCTOR_FIXTURE_STDOUT" == *"Usage:"* && -z "$DOCTOR_FIXTURE_STDERR" ]]; then
+    test_pass
+else
+    test_fail "rc=$DOCTOR_FIXTURE_RC stdout=$DOCTOR_FIXTURE_STDOUT stderr=$DOCTOR_FIXTURE_STDERR"
+fi
+
+test_case "strict plugin validation is a real failing diagnostic"
+DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+fake_bin="$TEST_TMP_DIR/doctor-bin"
+mkdir -p "$fake_bin"
+cat > "$fake_bin/claude" <<'SH'
+#!/usr/bin/env bash
+if [[ "${DOCTOR_CLAUDE_MODE:-fail}" == hang ]]; then sleep 30; fi
+[[ "${1:-}" == plugin && "${2:-}" == validate ]] || exit 2
+printf 'frontmatter schema mismatch\n' >&2
+exit 1
+SH
+chmod +x "$fake_bin/claude"
+if declare -f doctor_check_plugin_validation >/dev/null 2>&1; then
+    PATH="$fake_bin:$PATH" doctor_check_plugin_validation "$PROJECT_ROOT"
+fi
+if [[ "${DOCTOR_RESULTS_NAME[0]:-}" == "plugin-validation" && "${DOCTOR_RESULTS_STATUS[0]:-}" == "fail" && "${DOCTOR_RESULTS_DETAIL[0]:-}" == *"frontmatter schema mismatch"* ]]; then
+    test_pass
+else
+    test_fail "result=${DOCTOR_RESULTS_NAME[0]:-missing}/${DOCTOR_RESULTS_STATUS[0]:-missing} detail=${DOCTOR_RESULTS_DETAIL[0]:-}"
+fi
+
+test_case "strict plugin validation is bounded when Claude stalls"
+DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+started_at=$(date +%s)
+PATH="$fake_bin:$PATH" DOCTOR_CLAUDE_MODE=hang OCTOPUS_PLUGIN_VALIDATE_TIMEOUT=1 \
+    doctor_check_plugin_validation "$PROJECT_ROOT"
+elapsed=$(( $(date +%s) - started_at ))
+if [[ "$elapsed" -lt 5 && "${DOCTOR_RESULTS_STATUS[0]:-}" == fail ]]; then
+    test_pass
+else
+    test_fail "elapsed=${elapsed}s result=${DOCTOR_RESULTS_STATUS[0]:-missing}"
+fi
+
+test_case "agents CLI accepts a JSON array and reports its exact jq count"
+agents_plugin_root="$TEST_TMP_DIR/agents-plugin"
+agents_bin="$TEST_TMP_DIR/agents-bin"
+mkdir -p "$agents_plugin_root/agents" "$agents_bin"
+printf '  sample-agent:\n    isolation: worktree\n' > "$agents_plugin_root/agents/config.yaml"
+cat > "$agents_bin/claude" <<'SH'
+#!/usr/bin/env bash
+case "${DOCTOR_AGENTS_MODE:-compact}" in
+    compact) printf '%s\n' '[{"sessionId":"one"},{"sessionId":"two"}]' ;;
+    empty) printf '%s\n' '[]' ;;
+    object) printf '%s\n' '{"agents":[]}' ;;
+    truncated) printf '%s\n' '[{"sessionId":"one"}' ;;
+    malformed) printf '%s\n' 'not-json' ;;
+    bracketed_malformed) printf '%s\n' '[not-json]' ;;
+    failed) printf '%s\n' '[{"sessionId":"one"}]'; exit 7 ;;
+esac
+SH
+chmod +x "$agents_bin/claude"
+
+run_agents_check() {
+    DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+    PLUGIN_DIR="$agents_plugin_root" SUPPORTS_AGENTS_CLI=true PATH="$agents_bin:$PATH" \
+        DOCTOR_AGENTS_MODE="$1" doctor_check_agents
+}
+
+agent_result_status() {
+    local result_name="$1"
+    local i
+    for i in "${!DOCTOR_RESULTS_NAME[@]}"; do
+        if [[ "${DOCTOR_RESULTS_NAME[$i]}" == "$result_name" ]]; then
+            printf '%s|%s\n' "${DOCTOR_RESULTS_STATUS[$i]}" "${DOCTOR_RESULTS_MSG[$i]}"
+            return
+        fi
+    done
+}
+
+run_agents_check compact
+agent_cli_result="$(agent_result_status agents-cli)"
+if [[ "$agent_cli_result" == "pass|Claude agents CLI: 2 agents registered" ]]; then
+    test_pass
+else
+    test_fail "unexpected jq agents result: $agent_cli_result"
+fi
+
+test_case "agents CLI jq path reports 0 for an empty array (jq -e exit-status edge case)"
+run_agents_check empty
+agent_cli_result="$(agent_result_status agents-cli)"
+if [[ "$agent_cli_result" == "pass|Claude agents CLI: 0 agents registered" ]]; then
+    test_pass
+else
+    test_fail "unexpected jq empty-array result: $agent_cli_result"
+fi
+
+test_case "agents CLI rejects valid non-array JSON instead of passing a key count"
+run_agents_check object
+agent_cli_result="$(agent_result_status agents-cli)"
+if [[ "$agent_cli_result" == "warn|Claude agents CLI returned unparseable output" ]]; then
+    test_pass
+else
+    test_fail "non-array JSON was accepted: $agent_cli_result"
+fi
+
+test_case "agents CLI preserves command failures as warnings"
+run_agents_check failed
+agent_cli_result="$(agent_result_status agents-cli)"
+if [[ "$agent_cli_result" == "warn|Claude agents CLI returned no data" ]]; then
+    test_pass
+else
+    test_fail "command failure was accepted: $agent_cli_result"
+fi
+
+test_case "agents CLI no-jq fallback counts compact sessions and empty arrays"
+command() {
+    if [[ "${1:-}" == "-v" && "${2:-}" == "jq" ]]; then
+        return 1
+    fi
+    builtin command "$@"
+}
+run_agents_check compact
+compact_result="$(agent_result_status agents-cli)"
+run_agents_check empty
+empty_result="$(agent_result_status agents-cli)"
+unset -f command
+if [[ "$compact_result" == "pass|Claude agents CLI: 2 agents registered" &&
+      "$empty_result" == "pass|Claude agents CLI: 0 agents registered" ]]; then
+    test_pass
+else
+    test_fail "no-jq counts were incorrect: compact=$compact_result empty=$empty_result"
+fi
+
+test_case "agents CLI no-jq fallback rejects truncated arrays"
+command() {
+    if [[ "${1:-}" == "-v" && "${2:-}" == "jq" ]]; then
+        return 1
+    fi
+    builtin command "$@"
+}
+run_agents_check truncated
+truncated_result="$(agent_result_status agents-cli)"
+unset -f command
+if [[ "$truncated_result" == "warn|Claude agents CLI returned unparseable output" ]]; then
+    test_pass
+else
+    test_fail "truncated no-jq output was accepted: $truncated_result"
+fi
+
+test_case "agents CLI jq path rejects genuinely malformed (non-JSON) output"
+run_agents_check malformed
+malformed_jq_result="$(agent_result_status agents-cli)"
+if [[ "$malformed_jq_result" == "warn|Claude agents CLI returned unparseable output" ]]; then
+    test_pass
+else
+    test_fail "malformed output was accepted by jq path: $malformed_jq_result"
+fi
+
+test_case "agents CLI no-jq fallback rejects genuinely malformed (non-JSON) output"
+command() {
+    if [[ "${1:-}" == "-v" && "${2:-}" == "jq" ]]; then
+        return 1
+    fi
+    builtin command "$@"
+}
+run_agents_check malformed
+malformed_nojq_result="$(agent_result_status agents-cli)"
+unset -f command
+if [[ "$malformed_nojq_result" == "warn|Claude agents CLI returned unparseable output" ]]; then
+    test_pass
+else
+    test_fail "malformed no-jq output was accepted: $malformed_nojq_result"
+fi
+
+test_case "agents CLI jq path rejects bracket-shaped but internally invalid JSON"
+run_agents_check bracketed_malformed
+bracketed_jq_result="$(agent_result_status agents-cli)"
+if [[ "$bracketed_jq_result" == "warn|Claude agents CLI returned unparseable output" ]]; then
+    test_pass
+else
+    test_fail "bracket-shaped invalid JSON was accepted by jq path: $bracketed_jq_result"
+fi
+
+test_case "agents CLI no-jq fallback reports 0 for bracket-shaped but internally invalid JSON (documented heuristic limit)"
+command() {
+    if [[ "${1:-}" == "-v" && "${2:-}" == "jq" ]]; then
+        return 1
+    fi
+    builtin command "$@"
+}
+run_agents_check bracketed_malformed
+bracketed_nojq_result="$(agent_result_status agents-cli)"
+unset -f command
+if [[ "$bracketed_nojq_result" == "pass|Claude agents CLI: 0 agents registered" ]]; then
+    test_pass
+else
+    test_fail "bracket-shaped invalid JSON no-jq result was unexpected: $bracketed_nojq_result"
+fi
+
+test_case "JSON escaping preserves UTF-8 and control characters"
+escaped_unicode="$(doctor_json_escape $'snowman:☃ next:\u0085')"
+if jq -ne --arg expected $'snowman:☃ next:\u0085' --arg escaped "$escaped_unicode" \
+    '(("\"" + $escaped + "\"") | fromjson) == $expected' >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "escaped=$escaped_unicode"
+fi
+
+test_case "state health reports writable cache, stale runs, and orphan process evidence"
+state_root="$TEST_TMP_DIR/v10-state"
+mkdir -p "$state_root/runs/stale-run"
+cat > "$state_root/runs/stale-run/seats.json" <<'JSON'
+{"schema_version":"10.0","run_id":"stale-run","seats":[{"seat_id":"spawn-known-task","transition":"running","timestamp":"2000-01-01T00:00:00Z"}],"events":[]}
+JSON
+mkdir -p "$state_root/runs/malformed-run"
+printf '{not-json\n' > "$state_root/runs/malformed-run/seats.json"
+sleep 30 &
+orphan_pid=$!
+printf '%s:fixture:orphan-task\n' "$orphan_pid" > "$state_root/pids"
+DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+if declare -f doctor_check_v10_state_health >/dev/null 2>&1; then
+    # CLAUDE_PLUGIN_DATA/CLAUDE_OCTOPUS_WORKSPACE outrank WORKSPACE_DIR in the
+    # no-argument fallback's precedence; unset them so this test reliably
+    # exercises $state_root regardless of what the ambient environment has set.
+    unset CLAUDE_PLUGIN_DATA CLAUDE_OCTOPUS_WORKSPACE
+    WORKSPACE_DIR="$state_root" PID_FILE="$state_root/pids" OCTOPUS_RUNNING_STALE_SECONDS=1 \
+        doctor_check_v10_state_health
+fi
+kill "$orphan_pid" 2>/dev/null || true
+wait "$orphan_pid" 2>/dev/null || true
+state_results="$(for ((i=0; i<${#DOCTOR_RESULTS_NAME[@]}; i++)); do printf '%s=%s\n' "${DOCTOR_RESULTS_NAME[$i]}" "${DOCTOR_RESULTS_STATUS[$i]}"; done)"
+if [[ "$state_results" == *"probe-cache-writable=pass"* && "$state_results" == *"invalid-run-snapshots=warn"* && "$state_results" == *"stale-running-records=warn"* && "$state_results" == *"orphan-processes=warn"* ]]; then
+    test_pass
+else
+    test_fail "results=$state_results"
+fi
+
+test_case "orchestrator doctor JSON has no initialization output prefix"
+orchestrator_home="$TEST_TMP_DIR/orchestrator-home"
+mkdir -p "$orchestrator_home"
+set +e
+orchestrator_json=$(env HOME="$orchestrator_home" OCTOPUS_PROJECT_DIR="$PROJECT_ROOT" \
+    bash "$PROJECT_ROOT/scripts/orchestrate.sh" doctor updates --json 2>/dev/null)
+orchestrator_rc=$?
+set -e
+if [[ "$orchestrator_rc" -le 1 ]] && jq -e '
+    .schema_version == "10.0" and
+    (.summary.exit_code == 0 or .summary.exit_code == 1) and
+    (.results | type == "array")
+' <<< "$orchestrator_json" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "rc=$orchestrator_rc stdout=$orchestrator_json"
+fi
+
+test_case "setup verification is local-only and points to current Doctor entry points"
+setup_default="$(sed -n '/^## Default path/,/^## Advanced setup/p' "$PROJECT_ROOT/commands/setup.md")"
+if [[ "$setup_default" == *'setup-verification:pass (no provider request)'* &&
+      "$setup_default" == *'/octo:skill-doctor'* &&
+      "$setup_default" == *'octopus doctor'* &&
+      "$setup_default" != *'/octo:doctor'* ]]; then
+    test_pass
+else
+    test_fail "setup must use deterministic no-billing verification and current Doctor entry points"
+fi
+
+test_case "Doctor providers and auth reuse one shared readiness collection"
+doctor_source="$(cat "$PROJECT_ROOT/scripts/lib/doctor.sh")"
+if [[ "$doctor_source" == *'_doctor_collect_provider_readiness'* &&
+      "$doctor_source" == *'octo_provider_readiness_all'* &&
+      "$doctor_source" == *'DOCTOR_PROVIDER_READINESS_KIND'* ]]; then
+    test_pass
+else
+    test_fail "Doctor does not consume the shared provider readiness contract"
+fi
+
+test_case "each Doctor invocation refreshes the provider readiness snapshot"
+readiness_calls="$TEST_TMP_DIR/doctor-readiness-calls"
+: > "$readiness_calls"
+original_readiness_all="$(declare -f octo_provider_readiness_all)"
+original_doctor_check_providers="$(declare -f doctor_check_providers)"
+original_doctor_output_json="$(declare -f doctor_output_json)"
+octo_provider_readiness_all() {
+    printf 'call\n' >> "$readiness_calls"
+    printf '%s\n' '{"provider":"claude","status":"available","reason_code":"ready"}'
+}
+doctor_check_providers() { _doctor_collect_provider_readiness; }
+doctor_output_json() { :; }
+do_doctor providers --json
+do_doctor providers --json
+if [[ "$(wc -l < "$readiness_calls" | tr -d '[:space:]')" -eq 2 ]]; then
+    test_pass
+else
+    test_fail "Doctor reused readiness from an earlier invocation"
+fi
+eval "$original_readiness_all"
+eval "$original_doctor_check_providers"
+eval "$original_doctor_output_json"
+
+test_case "plan provider display reuses preflight output"
+plan_command="$(cat "$PROJECT_ROOT/commands/plan.md")"
+if [[ "$plan_command" == *'PROVIDER_STATUS='* &&
+      "$plan_command" == *'Render every provider status from `PROVIDER_STATUS`'* ]]; then
+    test_pass
+else
+    test_fail "plan must retain one provider-status source"
+fi
+
+test_summary
