@@ -1,0 +1,109 @@
+# Foreman per-target-repo configuration.
+# Copied to .foreman/config.yaml by `foreman init`. Edit to match your project.
+
+# Model used for the high-reasoning gated phases (plan, grill/ADR/PRD, slicing).
+model_planner: claude-fable-5
+# Model used for autonomous build workers. May be set to a cheaper model.
+model_worker: claude-fable-5
+# Reasoning effort for agents. One of: low, medium, high, xhigh, max.
+effort: high
+
+# Vendored skills that MUST be installed for the pipeline to run.
+# Foreman refuses to start a pipeline if any of these are missing.
+required_skills:
+  - foreman-grill-docs
+  - foreman-to-prd
+  - foreman-to-issues
+  - foreman-tdd
+  - foreman-plan          # WS7: planning-stage skill
+  - foreman-web-testing   # WS7: e2e-stage skill
+  # WS7 also installs foreman-debug + foreman-verify (worker helper skills the
+  # builder invokes opportunistically — installed but not hard-required here).
+
+# Commands Foreman runs ITSELF to verify a worker's claim (never trusts the agent).
+# Set any to null/empty to skip that check. cwd is the issue worktree.
+commands:
+  test: "npm test"
+  lint: "npm run lint"
+  typecheck: "npm run typecheck"
+  e2e: "npx playwright test"
+
+git:
+  integration_branch: main
+  merge_strategy: merge     # merge | squash | rebase
+  open_pr: false
+
+limits:
+  max_parallel: 2           # concurrent autonomous workers
+  max_retries: 3            # per-issue retry ceiling before escalation
+  daily_cost_usd: 50        # global hard stop
+
+# Default per-run budgets applied to new issues (issues may override in frontmatter).
+run_budget:
+  max_turns: 80
+  max_cost_usd: 5.00
+  timeout_min: 45
+
+# Stuck detection: escalate if a worker makes no file changes and no test
+# progress across this many consecutive turns.
+stuck_turns: 12
+
+# Turn-budget extensions: agents/workers are told their turn budget and asked to
+# finish within it. If a worker runs out of turns (or asks via request_more_turns
+# in its FOREMAN-SUMMARY), Foreman can resume the SAME session with more turns,
+# up to this many times, before escalating to a human. Only turn exhaustion
+# extends — cost / timeout / stuck kills still escalate.
+auto_extend_turns: true     # a hard turn cut-off auto-grants an extension
+max_turn_extensions: 2      # extra resumes per issue/agent run before escalating
+turn_extension_size: 0      # turns granted per extension; 0 = reuse run_budget.max_turns
+
+e2e_enabled: true
+
+# Permission mode passed to every headless `claude` invocation.
+# One of: acceptEdits, auto, default, dontAsk, plan, bypassPermissions.
+# Never silently bypass all permissions.
+permission_mode: acceptEdits
+
+# ---- Phase 2: Trustworthy Autonomy ----
+
+# Read-only agents Foreman installs into .claude/agents/ and verifies at startup.
+required_agents:
+  - foreman-evaluator
+  - foreman-auditor
+  - foreman-code-review       # WS7 (opt-in gate)
+  - foreman-security-review   # WS7 (opt-in gate)
+
+# WS2: the builder never grades its own work. A read-only evaluator grades each
+# slice on a 1-5 rubric from a fresh context; objections bounce to a fresh worker.
+model_evaluator: claude-haiku-4-5-20251001    # cheaper than the worker by default
+evaluator_enabled: true
+evaluator_min_score: 3                         # a rubric score below this = objections
+evaluator_budget: { max_turns: 30, max_cost_usd: 2.00, timeout_min: 20 }
+
+# WS3: fresh-session retries with a distilled failure report (never resume context).
+retry_strategy: fresh                          # or: resume
+
+# WS4: after every N merged feature issues, run a janitor pass (same gate).
+janitor_enabled: true
+janitor_every: 3
+janitor_kinds: [dedup, conventions, docs]
+
+# WS5: read-only spec-integrity auditor + low-fatigue review notifications.
+auditor_enabled: true
+model_auditor: claude-haiku-4-5-20251001
+# notify_command: "ntfy publish my-topic"     # fired on review-needed / escalation
+
+# WS7: two extra read-only merge-gate graders that review the committed slice after
+# the evaluator passes. A blocking verdict bounces a fresh builder with the findings;
+# repeated objections (or hitting max_retries) escalate to a human. Both are opt-in
+# (each adds a fresh agent run per issue) and reuse the evaluator's small budget.
+code_review_enabled: false
+model_code_reviewer: claude-haiku-4-5-20251001
+code_review_budget: { max_turns: 30, max_cost_usd: 2.00, timeout_min: 20 }
+security_review_enabled: false
+model_security_reviewer: claude-haiku-4-5-20251001
+security_review_budget: { max_turns: 30, max_cost_usd: 2.00, timeout_min: 20 }
+
+# WS6: `foreman bench` (harness regression testing) settings.
+bench_eval_set: .foreman/eval_set
+bench_cost_ceiling_usd: 5.0

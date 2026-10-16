@@ -1,0 +1,137 @@
+"""SkillInvocation — the single place that turns a phase + context into a headless
+prompt (§6). All prompts reference ONLY the vendored ``foreman-*`` skills, never
+the upstream names (R2/§12). If Claude Code changes how skills are invoked from
+``-p`` mode, this is the one file to fix.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+
+def use_skill(skill: str) -> str:
+    """Standard instruction to invoke a vendored skill by name in headless mode."""
+    return (
+        f'Use the Skill tool to run the "{skill}" skill (equivalently, the '
+        f'/{skill} slash command). It is the vendored Foreman version of this '
+        f'skill — follow it exactly and do not use any similarly-named '
+        f'user-installed skill.'
+    )
+
+
+HEADLESS_PREAMBLE = (
+    "You are running fully headless inside Foreman. There is no interactive user. "
+    "Do not ask questions and do not wait for input — produce the required output "
+    "files and then stop. Defer anything you genuinely cannot resolve to the "
+    "'Open questions for reviewer' section as instructed by the skill. "
+    "You run under a bounded turn budget — work efficiently and stop cleanly rather "
+    "than sprawling; if you are cut off before finishing, Foreman may resume you to "
+    "continue, so leave your output files in the best state you can before stopping."
+)
+
+
+class SkillInvocation:
+    """Builds the ``-p`` prompt for each pipeline phase."""
+
+    @staticmethod
+    def planner(
+        request: str, slug: str, plan_path: Path, *,
+        prev_body: Optional[str] = None, review_comments: Optional[str] = None,
+    ) -> str:
+        # WS7: the planner follows the foreman-plan skill (deep, exploration-first,
+        # decomposition-aware) to produce the plan the grill stage then challenges.
+        parts = [
+            HEADLESS_PREAMBLE,
+            "",
+            use_skill("foreman-plan"),
+            "",
+            "You are a senior staff engineer. Produce a DEEP implementation plan "
+            "for the feature request below, grounded in this repository. First "
+            "explore the codebase to understand the current architecture, domain "
+            "language (CONTEXT.md if present) and prior decisions (docs/adr/). Then "
+            "write a thorough plan: goals, approach, the modules/seams involved, "
+            "data and interface changes, risks, sequencing, and testing strategy.",
+            "",
+            f"Write the plan as markdown to this exact path (body only, no YAML "
+            f"frontmatter): {plan_path}",
+            "",
+            f"--- FEATURE REQUEST ---\n{request}",
+        ]
+        if prev_body:
+            parts.append(
+                "\n--- YOUR PRIOR PLAN (revise it; keep everything that still applies, "
+                "do not drop earlier requirements) ---\n" + prev_body
+            )
+        if review_comments:
+            parts.append(
+                "\n--- REVIEWER COMMENTS on the prior plan — you MUST address ALL of "
+                "them in this revision ---\n" + review_comments
+            )
+        if prev_body or review_comments:
+            parts.append(
+                "\nEnd the plan with a '## Changelog' section: one bullet per revision "
+                "saying what changed and which reviewer comment drove it."
+            )
+        return "\n".join(parts)
+
+    @staticmethod
+    def grill(
+        slug: str,
+        plan_body: str,
+        adr_path: Path,
+        prd_path: Path,
+        *,
+        review_comments: Optional[dict[str, str]] = None,
+        prev_bodies: Optional[dict[str, str]] = None,
+    ) -> str:
+        parts = [HEADLESS_PREAMBLE, "", use_skill("foreman-grill-docs"), ""]
+        parts.append(
+            "Grill the APPROVED plan below against this codebase and its domain "
+            "model. Write an ADR draft and a PRD draft (the PRD per the "
+            "foreman-to-prd template). Each draft MUST begin with an "
+            "'## Open questions for reviewer' section followed by a "
+            "'## Decisions made on your behalf' digest (use a `_None ...` line "
+            "if there were no non-obvious judgment calls).\n"
+            f"Write the ADR draft (body only) to: {adr_path}\n"
+            f"Write the PRD draft (body only) to: {prd_path}\n"
+        )
+        parts.append(f"\n--- APPROVED PLAN ---\n{plan_body}\n")
+        if prev_bodies:
+            for kind, body in prev_bodies.items():
+                parts.append(f"\n--- PREVIOUS {kind.upper()} DRAFT ---\n{body}\n")
+        if review_comments:
+            parts.append(
+                "\n--- REVIEWER COMMENTS (these answer your previous open "
+                "questions; consume them, resolve those branches, remove the "
+                "answered questions, and append a ## Changelog) ---"
+            )
+            for kind, comments in review_comments.items():
+                if comments:
+                    parts.append(f"\nOn the {kind}:\n{comments}\n")
+        return "\n".join(parts)
+
+    @staticmethod
+    def slicer(slug: str, prd_body: str, issues_dir: Path) -> str:
+        return (
+            f"{HEADLESS_PREAMBLE}\n\n"
+            f"{use_skill('foreman-to-issues')}\n\n"
+            "Break the APPROVED PRD below into small, dependency-ordered, "
+            "vertically-sliced issues. Write one file per issue into this exact "
+            f"directory, named ISS-001.md, ISS-002.md, ...: {issues_dir}\n"
+            "Each file must use the exact YAML-frontmatter issue schema from the "
+            "skill, with non-empty prd_refs for traceability.\n\n"
+            f"--- APPROVED PRD ---\n{prd_body}\n"
+        )
+
+    @staticmethod
+    def e2e(prd_body: str, e2e_command: Optional[str]) -> str:
+        return (
+            f"{HEADLESS_PREAMBLE}\n\n"
+            f"{use_skill('foreman-web-testing')}\n\n"
+            "Derive end-to-end tests from the 'User Flows' section of the PRD "
+            "below, implement them, and make them pass. Use this e2e command for "
+            f"verification: {e2e_command or '(not configured)'}\n"
+            "End with the required FOREMAN-SUMMARY json block (issue_id: \"e2e\").\n\n"
+            f"--- APPROVED PRD ---\n{prd_body}\n"
+        )

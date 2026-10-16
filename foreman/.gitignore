@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.playwright-mcp/
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# Foreman per-target state and init output (gitignore has no inline comments,
+# so these must each be on their own line).
+.foreman/
+.claude/
