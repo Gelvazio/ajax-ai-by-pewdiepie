@@ -23,7 +23,7 @@ Cada pasta abaixo é uma cópia dos arquivos de outro repositório, sem o `.git`
 | `superpowers/` | obra/superpowers | Conjunto de skills para desenvolvimento com Claude Code |
 | `diagram-design/` | cathrynlavery/diagram-design | Skill que gera diagramas técnicos a partir de linguagem natural |
 | `humanizer/` | blader/humanizer | Skill para reescrever textos de IA para soarem mais naturais (pelo nome e pela busca) |
-| `graphify/` | Graphify-Labs/graphify | Skill para Claude Code (detalhes não verificados) |
+| `graphify/` | Graphify-Labs/graphify | Mapeia o projeto (código, docs, PDFs, imagens) num grafo de conhecimento consultável, com o comando `/graphify` no assistente. CLI em Python (`graphifyy`), Apache-2.0 |
 | `addy-osmani-skills/` | addyosmani/agent-skills | Skills de engenharia de produção para agentes de código |
 | `impeccable/` | pbakaus/impeccable | Skill (detalhes não verificados) |
 | `repolyze/` | OssiumOfficial/Repolyze | Ferramenta para analisar repositórios, feita com Next.js e pnpm |
@@ -51,7 +51,7 @@ Como as pastas não têm `.git`, para atualizar uma delas é preciso recopiar o 
 - **`superpowers/`:** compare os nomes das skills com as que já existem antes de instalar, para evitar conflito.
 - **`diagram-design/`:** revise o diagrama gerado antes de usá-lo em documentação ou apresentação.
 - **`humanizer/`:** use para revisar a escrita, não para ocultar que um texto foi gerado por IA.
-- **`graphify/`:** leia o README antes de usar. Os detalhes ainda não foram verificados aqui.
+- **`graphify/`:** instale com `uv tool install graphifyy` e depois rode `graphify install`. Só o código é lido localmente; documentos, PDFs e imagens usam o modelo do assistente ou uma chave de API.
 - **`addy-osmani-skills/`:** use como checklist de engenharia e adapte ao time, sem seguir tudo ao pé da letra.
 - **`impeccable/`:** leia o README antes de usar. Os detalhes ainda não foram verificados aqui.
 - **`repolyze/`:** nunca commite o `.env` nem credenciais do banco Prisma.
