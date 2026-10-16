@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajax-ai-by-pewdiepie</title>
+<style>
+  :root {
+    --bg: #f5f5f4; --card: #ffffff; --text: #1c1917; --muted: #57534e;
+    --accent: #b45309; --border: #e7e5e4; --code: #f5f5f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1c1917; --card: #292524; --text: #fafaf9; --muted: #a8a29e;
+      --accent: #fbbf24; --border: #44403c; --code: #1c1917;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1c1917; --card: #292524; --text: #fafaf9; --muted: #a8a29e;
+    --accent: #fbbf24; --border: #44403c; --code: #1c1917;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header { margin-bottom: 28px; }
+  h1 { margin: 0 0 4px; font-size: 1.75rem; }
+  .sub { margin: 0; color: var(--muted); font-size: .9rem; }
+  .sub a { color: var(--accent); }
+  .group { margin-bottom: 32px; }
+  .group > h2 { margin: 0 0 12px; font-size: 1.2rem; color: var(--accent); }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .card.full { grid-column: 1 / -1; }
+  .card h3 { margin: 0 0 6px; font-size: .98rem; }
+  .card p { margin: 0 0 6px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card ul { margin: 0; padding-left: 18px; }
+  .card li { margin: 2px 0; }
+  .card div { margin: 2px 0; font-size: .92rem; color: var(--muted); }
+  .card div strong { color: var(--text); }
+  code { background: var(--code); border-radius: 4px; padding: 1px 5px; font-size: .88em; }
+  .err { color: #b91c1c; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  footer { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">ajax-ai-by-pewdiepie</h1>
+    <p class="sub" id="sub">Lendo CLAUDE.md…</p>
+  </header>
+  <main id="app"></main>
+  <footer>Gerado a partir do arquivo CLAUDE.md desta pasta.</footer>
+</div>
+
+<script>
+  const SOURCE = 'CLAUDE.md';
+
+  const esc = (s) => s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+
+  // Inline markdown: `code`, **bold**, [text](https://...)
+  function inline(raw) {
+    return esc(raw)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  }
+
+  function parseSections(md) {
+    let title = '';
+    const sections = [];
+    let current = null;
+    for (const line of md.split(/\r?\n/)) {
+      if (/^# /.test(line)) { title = line.slice(2).trim(); continue; }
+      if (/^## /.test(line)) {
+        current = { title: line.slice(3).trim(), lines: [] };
+        sections.push(current);
+        continue;
+      }
+      if (current) current.lines.push(line);
+    }
+    return { title, sections };
+  }
+
+  function parseBlocks(lines) {
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+
+      if (/^\|/.test(line)) {
+        const rows = [];
+        while (i < lines.length && /^\|/.test(lines[i])) { rows.push(lines[i]); i++; }
+        const cells = rows.map((r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+        const header = cells[0];
+        const body = cells.slice(1).filter((r) => !r.every((c) => /^:?-+:?$/.test(c)));
+        out.push({ type: 'table', header, rows: body });
+        continue;
+      }
+
+      if (/^\s*- /.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*- /.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*- /, ''));
+          i++;
+        }
+        out.push({ type: 'list', items });
+        continue;
+      }
+
+      if (/^### /.test(line)) { out.push({ type: 'h3', text: line.slice(4) }); i++; continue; }
+
+      const para = [];
+      while (i < lines.length && lines[i].trim() && !/^(\||\s*- |### )/.test(lines[i])) {
+        para.push(lines[i]);
+        i++;
+      }
+      out.push({ type: 'p', text: para.join(' ') });
+    }
+    return out;
+  }
+
+  // Turns one "## section" into a group with its cards.
+  function renderSection(section) {
+    const intro = [];
+    const cards = [];
+
+    for (const block of parseBlocks(section.lines)) {
+      if (block.type === 'p') {
+        intro.push(`<p>${inline(block.text)}</p>`);
+      } else if (block.type === 'h3') {
+        intro.push(`<h3>${inline(block.text)}</h3>`);
+      } else if (block.type === 'list') {
+        const allBold = block.items.every((it) => /^\*\*.+?\*\*/.test(it));
+        if (allBold) {
+          for (const it of block.items) {
+            const m = it.match(/^\*\*(.+?)\*\*:?\s*(.*)$/);
+            cards.push({ title: m[1], html: `<p>${inline(m[2])}</p>` });
+          }
+        } else {
+          intro.push(`<ul>${block.items.map((it) => `<li>${inline(it)}</li>`).join('')}</ul>`);
+        }
+      } else if (block.type === 'table') {
+        for (const row of block.rows) {
+          const [name, ...rest] = row;
+          const html = block.header.slice(1)
+            .map((h, idx) => `<div><strong>${inline(h)}:</strong> ${inline(rest[idx] || '')}</div>`)
+            .join('');
+          cards.push({ title: name, html });
+        }
+      }
+    }
+
+    const hasCards = cards.length > 0;
+    const cardHtml = hasCards
+      ? cards.map((c) => `<article class="card"><h3>${inline(c.title)}</h3>${c.html}</article>`).join('')
+      : `<article class="card full"><h3>${inline(section.title)}</h3>${intro.join('')}</article>`;
+
+    return `
+      <section class="group">
+        ${hasCards ? `<h2>${inline(section.title)}</h2>${intro.length ? `<div class="card full">${intro.join('')}</div>` : ''}` : ''}
+        <div class="grid">${cardHtml}</div>
+      </section>`;
+  }
+
+  function render(md) {
+    const { title, sections } = parseSections(md);
+    if (title) {
+      document.getElementById('title').textContent = title;
+      document.title = title;
+    }
+    document.getElementById('sub').textContent = `${sections.length} seções lidas de ${SOURCE}`;
+    document.getElementById('app').innerHTML = sections.map(renderSection).join('');
+  }
+
+  fetch(SOURCE)
+    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+    .then(render)
+    .catch((e) => {
+      document.getElementById('sub').textContent = '';
+      document.getElementById('app').innerHTML =
+        `<div class="err">Não consegui ler ${SOURCE} (${esc(e.message)}).<br>` +
+        `Abra esta pasta por um servidor local, por exemplo: <code>python3 -m http.server</code>, ` +
+        `e acesse <code>http://localhost:8000</code>.</div>`;
+    });
+</script>
+</body>
+</html>
